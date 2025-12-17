@@ -50,7 +50,9 @@ ENTRY_EXPIRATION_PRICE_PCT   = _get_float("ENTRY_EXPIRATION_PRICE_PCT","0.6")
 
 # TP/SL
 MOVE_SL_TO_BE_ON_TP1 = _get_bool("MOVE_SL_TO_BE_ON_TP1","true")
-INITIAL_SL_PCT = _get_float("INITIAL_SL_PCT","19.0")  # SL distance from entry in %
+# INITIAL_SL_PCT: Fallback SL if signal has no SL (should rarely happen)
+# Bot uses SL from signal first, this is only the safety fallback
+INITIAL_SL_PCT = _get_float("INITIAL_SL_PCT","6.0")
 
 # TP_SPLITS: percentage of position to close at each TP level
 # Example: 30,30,30 means 90% total, leaving 10% as runner for trailing stop
