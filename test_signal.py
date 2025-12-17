@@ -27,26 +27,58 @@ fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%H:%M:%S")
 h.setFormatter(fmt)
 log.handlers[:] = [h]
 
-# Example signal (copy from Discord)
-TEST_SIGNAL = """
-<@&1398657164066820199> 📊 NEW SIGNAL • BARD • Entry $0.92000
+# ============================================================
+# AO Trading Signal Format (Embed-style)
+# ============================================================
+# Test with DCA:
+TEST_SIGNAL_WITH_DCA = """
+📊 NEW SIGNAL • OL • Entry $0.01740
 
-**BARD** SHORT Signal
-BARD DIRECT LINKS: [ByBit](https://www.bybit.com/trade/usdt/bardusdt)
+AO Trading • New Trade Signal
+🔴 SHORT SIGNAL - OL/USDT
+Leverage: 25x • Trader: haseeb1111
 
-**Enter on Trigger:** `$0.92000`
+📊 Entry: 0.01740 ⏳ Pending
 
-**TP1:** `$0.91218` 🎯 **→ NEXT**
-**TP2:** `$0.90482`
-**TP3:** `$0.88274`
-**TP4:** `$0.55200`
+🎯 Profit Targets:
+🎯 TP1: 0.01719 → NEXT
+⏳ TP2: 0.01698 Pending
+⏳ TP3: 0.01670 Pending
+⏳ TP4: 0.01601 Pending
 
-**DCA #1:** `$0.96600`
-**DCA #2:** `$1.05800`
-**DCA #3:** `$1.24200`
+📊 DCA Levels:
+⏳ DCA1: 0.01800 Pending
 
-`⏳ AWAITING ENTRY - Waiting for $0.92000 trigger`
+🛡️ Stop Loss: 0.01846
+
+📊 TRADE NOW:
+ByBit • MEXC • Blofin • Bitget
+
+AO Trading • Trade Together. Win Together. 🚀
 """
+
+# Test without DCA:
+TEST_SIGNAL_NO_DCA = """
+📊 NEW SIGNAL • BTC • Entry $42500.00
+
+AO Trading • New Trade Signal
+🟢 LONG SIGNAL - BTC/USDT
+Leverage: 10x • Trader: haseeb1111
+
+📊 Entry: 42500.00 ⏳ Pending
+
+🎯 Profit Targets:
+🎯 TP1: 42800.00 → NEXT
+⏳ TP2: 43100.00 Pending
+⏳ TP3: 43500.00 Pending
+
+🛡️ Stop Loss: 41800.00
+
+AO Trading • Trade Together. Win Together. 🚀
+"""
+
+# Default test signal (with DCA)
+TEST_SIGNAL = TEST_SIGNAL_WITH_DCA
 
 def main():
     print("="*60)
