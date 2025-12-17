@@ -69,9 +69,10 @@ TRAIL_DISTANCE_PCT   = _get_float("TRAIL_DISTANCE_PCT","2.0")
 TRAIL_ACTIVATE_ON_TP = _get_bool("TRAIL_ACTIVATE_ON_TP","true")
 
 # DCA sizing multipliers vs BASE qty
-# Example: 1.5,2.25 means DCA1 = 1.5x base qty, DCA2 = 2.25x base qty
+# AO Trading: Only 0-1 DCA per signal
+# Example: 1.5 means DCA1 = 1.5x base qty
 # Only places as many DCAs as there are multipliers (ignores extra DCA prices from signal)
-DCA_QTY_MULTS = [float(x) for x in _get("DCA_QTY_MULTS","1.5,2.25").split(",") if x.strip()]
+DCA_QTY_MULTS = [float(x) for x in _get("DCA_QTY_MULTS","1.5").split(",") if x.strip()]
 
 # Timing
 POLL_SECONDS    = _get_int("POLL_SECONDS","15")
