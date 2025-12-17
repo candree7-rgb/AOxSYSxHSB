@@ -501,6 +501,12 @@ class TradeEngine:
                     tr["dca_fills"] = len(filled_dcas)
                     dca_count = len(DCA_QTY_MULTS)
                     self.log.info(f"📈 DCA{dca_num} FILLED {tr['symbol']} ({tr['dca_fills']}/{dca_count})")
+
+                    # Recalculate TPs based on new average entry
+                    try:
+                        self.recalculate_tps_after_dca(tr)
+                    except Exception as e:
+                        self.log.warning(f"TP recalculation failed after DCA: {e}")
             return
 
         # TP fills / other events: orderLinkId pattern "<trade_id>:TP1"
@@ -606,6 +612,162 @@ class TradeEngine:
             self.log.info(f"DRY_RUN set trailing: {body}")
             return
         self.bybit.set_trading_stop(body)
+
+    # ---------- DCA TP recalculation ----------
+    def recalculate_tps_after_dca(self, trade: Dict[str, Any]) -> None:
+        """Recalculate and replace TP orders after DCA fill.
+
+        When a DCA fills, the average entry price changes. This method:
+        1. Gets the new average entry from Bybit
+        2. Calculates original TP distances (%) from original entry
+        3. Cancels all unfilled TP orders
+        4. Places new TPs with same % distances from new avg entry
+        """
+        symbol = trade["symbol"]
+        side = trade["order_side"]  # Buy/Sell
+        original_entry = float(trade.get("original_entry") or trade.get("entry_price") or trade.get("trigger"))
+
+        # Store original entry if not already stored
+        if not trade.get("original_entry"):
+            trade["original_entry"] = original_entry
+
+        # Get new average entry from Bybit
+        new_size, new_avg = self.position_size_avg(symbol)
+        if new_size <= 0 or new_avg <= 0:
+            self.log.warning(f"Cannot get new avg entry for {symbol}, skipping TP recalc")
+            return
+
+        # Update trade with new entry price
+        old_entry = float(trade.get("entry_price") or original_entry)
+        trade["entry_price"] = new_avg
+
+        self.log.info(f"📊 DCA filled - Avg entry changed: {old_entry:.6f} → {new_avg:.6f}")
+
+        # Get instrument rules
+        rules = self._get_instrument_rules(symbol)
+        tick_size = rules["tick_size"]
+        qty_step = rules["qty_step"]
+        min_qty = rules["min_qty"]
+
+        # Get original TP prices and calculate % distances from ORIGINAL entry
+        original_tps = trade.get("original_tp_prices") or trade.get("tp_prices") or []
+        if not original_tps:
+            self.log.warning(f"No TP prices found for {symbol}, skipping TP recalc")
+            return
+
+        # Store original TPs if not already stored
+        if not trade.get("original_tp_prices"):
+            trade["original_tp_prices"] = list(original_tps)
+
+        # Calculate % distances from original entry
+        tp_pct_distances = []
+        for tp_price in original_tps:
+            # For SHORT: TP is below entry, distance is negative
+            # For LONG: TP is above entry, distance is positive
+            pct_dist = (float(tp_price) / original_entry - 1) * 100
+            tp_pct_distances.append(pct_dist)
+
+        # Calculate new TP prices based on new avg entry
+        new_tp_prices = []
+        for pct_dist in tp_pct_distances:
+            new_tp = new_avg * (1 + pct_dist / 100)
+            new_tp = self._round_price(new_tp, tick_size)
+            new_tp_prices.append(new_tp)
+
+        self.log.info(f"📊 Recalculating TPs from new entry {new_avg:.6f}:")
+        for i, (old_tp, new_tp) in enumerate(zip(original_tps, new_tp_prices)):
+            self.log.info(f"   TP{i+1}: {old_tp:.6f} → {new_tp:.6f}")
+
+        # Cancel existing unfilled TP orders
+        filled_tps = set(trade.get("tp_fills_list", []))
+        tp_order_ids = trade.get("tp_order_ids", {})
+        splits = trade.get("tp_splits") or TP_SPLITS
+
+        cancelled_count = 0
+        for tp_num_str, order_id in list(tp_order_ids.items()):
+            tp_num = int(tp_num_str)
+            if tp_num in filled_tps:
+                continue  # Already filled, don't cancel
+
+            if order_id and order_id != "DRY_RUN" and not order_id.startswith("DRY_"):
+                try:
+                    self.bybit.cancel_order({
+                        "category": CATEGORY,
+                        "symbol": symbol,
+                        "orderId": order_id
+                    })
+                    cancelled_count += 1
+                except Exception as e:
+                    # Order might already be filled or cancelled
+                    if "not found" not in str(e).lower():
+                        self.log.warning(f"Failed to cancel TP{tp_num}: {e}")
+
+        if cancelled_count > 0:
+            self.log.info(f"🗑️ Cancelled {cancelled_count} old TP order(s)")
+
+        # Place new TP orders
+        tp_to_place = min(len(new_tp_prices), len(splits))
+        new_tp_order_ids = {}
+
+        if DRY_RUN:
+            for idx in range(tp_to_place):
+                tp_num = idx + 1
+                if tp_num in filled_tps:
+                    continue
+                self.log.info(f"DRY_RUN: Would place new TP{tp_num} @ {new_tp_prices[idx]:.6f}")
+                new_tp_order_ids[str(tp_num)] = f"DRY_TP{tp_num}_v2"
+        else:
+            for idx in range(tp_to_place):
+                tp_num = idx + 1
+                if tp_num in filled_tps:
+                    # Keep old order ID for filled TPs
+                    if str(tp_num) in tp_order_ids:
+                        new_tp_order_ids[str(tp_num)] = tp_order_ids[str(tp_num)]
+                    continue
+
+                pct = float(splits[idx])
+                if pct <= 0:
+                    continue
+
+                tp_price = new_tp_prices[idx]
+                qty = self._round_qty(new_size * (pct / 100.0), qty_step, min_qty)
+
+                # Use new orderLinkId with version suffix
+                version = trade.get("tp_version", 1) + 1
+                trade["tp_version"] = version
+                link_id = f"{trade['id']}:TP{tp_num}v{version}"
+
+                body = {
+                    "category": CATEGORY,
+                    "symbol": symbol,
+                    "side": _opposite_side(side),
+                    "orderType": "Limit",
+                    "qty": f"{qty}",
+                    "price": f"{tp_price:.10f}",
+                    "timeInForce": "GTC",
+                    "reduceOnly": True,
+                    "closeOnTrigger": False,
+                    "orderLinkId": link_id,
+                }
+
+                try:
+                    resp = self.bybit.place_order(body)
+                    oid = (resp.get("result") or {}).get("orderId")
+                    if oid:
+                        new_tp_order_ids[str(tp_num)] = oid
+                        self.log.info(f"✅ New TP{tp_num} placed @ {tp_price:.6f}")
+                    else:
+                        self.log.warning(f"⚠️ TP{tp_num} order response has no orderId")
+                except Exception as e:
+                    self.log.error(f"❌ Failed to place new TP{tp_num}: {e}")
+
+        # Update trade state
+        trade["tp_prices"] = new_tp_prices
+        trade["tp_order_ids"] = new_tp_order_ids
+        if "1" in new_tp_order_ids:
+            trade["tp1_order_id"] = new_tp_order_ids["1"]
+
+        self.log.info(f"✅ TP recalculation complete for {symbol}")
 
     # ---------- maintenance ----------
     def check_tp_fills_fallback(self) -> None:
