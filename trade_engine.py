@@ -771,7 +771,11 @@ class TradeEngine:
 
     # ---------- maintenance ----------
     def check_tp_fills_fallback(self) -> None:
-        """Polling fallback: Check if TP1 was filled but WS missed it."""
+        """Polling fallback: Check if TP1 was filled OR price passed through TP1.
+
+        This ensures SL moves to BE even if the limit order didn't fill
+        but price has already passed the TP1 level.
+        """
         if DRY_RUN:
             return
 
@@ -783,23 +787,55 @@ class TradeEngine:
             if tr.get("sl_moved_to_be"):
                 continue  # Already moved
 
-            # Check if TP1 order still exists
-            tp1_oid = tr.get("tp1_order_id")
-            if not tp1_oid:
+            symbol = tr["symbol"]
+            side = tr.get("order_side")  # Buy = Long, Sell = Short
+            tp_prices = tr.get("tp_prices") or []
+
+            if not tp_prices:
                 continue
 
-            try:
-                open_orders = self.bybit.open_orders(CATEGORY, tr["symbol"])
-                tp1_still_open = any(o.get("orderId") == tp1_oid for o in open_orders)
+            tp1_price = float(tp_prices[0])
+            tp1_oid = tr.get("tp1_order_id")
 
-                if not tp1_still_open:
-                    # TP1 was filled (or cancelled) - move SL to BE
+            try:
+                # Check 1: Is TP1 order still open?
+                tp1_still_open = False
+                if tp1_oid:
+                    open_orders = self.bybit.open_orders(CATEGORY, symbol)
+                    tp1_still_open = any(o.get("orderId") == tp1_oid for o in open_orders)
+
+                # Check 2: Has price passed through TP1 level?
+                current_price = self.bybit.last_price(CATEGORY, symbol)
+                price_passed_tp1 = False
+
+                if side == "Sell":  # SHORT: TP1 is below entry, price should go DOWN
+                    price_passed_tp1 = current_price <= tp1_price
+                else:  # LONG: TP1 is above entry, price should go UP
+                    price_passed_tp1 = current_price >= tp1_price
+
+                # Move SL to BE if TP1 filled OR price passed through
+                if not tp1_still_open or price_passed_tp1:
                     be = float(tr.get("entry_price") or tr.get("trigger"))
-                    if self._move_sl(tr["symbol"], be):
+                    reason = "price passed TP1" if price_passed_tp1 else "TP1 filled"
+
+                    if self._move_sl(symbol, be):
                         tr["sl_moved_to_be"] = True
-                        self.log.info(f"✅ SL -> BE (poll fallback) {tr['symbol']} @ {be}")
+                        self.log.info(f"✅ SL -> BE ({reason}) {symbol} @ {be}")
+
+                        # If price passed but order still open, cancel it
+                        if price_passed_tp1 and tp1_still_open and tp1_oid:
+                            try:
+                                self.bybit.cancel_order({
+                                    "category": CATEGORY,
+                                    "symbol": symbol,
+                                    "orderId": tp1_oid
+                                })
+                                self.log.info(f"🗑️ Cancelled stale TP1 order (price already passed)")
+                            except Exception:
+                                pass  # Order might already be gone
+
             except Exception as e:
-                self.log.debug(f"TP fill check failed for {tr['symbol']}: {e}")
+                self.log.debug(f"TP fill check failed for {symbol}: {e}")
 
     def cancel_expired_entries(self) -> None:
         now = time.time()
