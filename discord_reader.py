@@ -12,8 +12,9 @@ class DiscordReader:
         self.token = token
         self.channel_id = channel_id
         self.base_url = "https://discord.com/api/v10"
+        # Use token as-is (don't add "Bot " prefix - user may have user token or already include prefix)
         self.headers = {
-            "Authorization": f"Bot {token}",
+            "Authorization": token,
             "User-Agent": "AO-Trading-Bot/1.0",
         }
 
@@ -87,12 +88,10 @@ class DiscordReader:
         # Join all parts
         text = " | ".join(filter(None, parts))
 
-        # Clean up Discord formatting
+        # Clean up Discord formatting (same as working old script)
         text = html.unescape(text)
-        # Remove markdown but keep structure
-        text = re.sub(r"<@[!&]?\d+>", "", text)  # Remove mentions
-        text = re.sub(r"<#\d+>", "", text)  # Remove channel mentions
-        text = re.sub(r"<a?:\w+:\d+>", "", text)  # Remove custom emojis
+        # Remove mentions, markdown formatting, and HTML-like tags
+        text = re.sub(r"[<@!>&]|\*\*|\*|__|_|`|<.*?>", "", text)
 
         return text.strip()
 
