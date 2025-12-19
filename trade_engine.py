@@ -207,7 +207,16 @@ class TradeEngine:
         except Exception as e:
             self.log.warning(f"set_leverage failed for {symbol}: {e}")
 
-        last = self.bybit.last_price(CATEGORY, symbol)
+        # Get last price - skip if symbol doesn't exist on Bybit
+        try:
+            last = self.bybit.last_price(CATEGORY, symbol)
+        except Exception as e:
+            if "invalid" in str(e).lower():
+                self.log.warning(f"SKIP {symbol} – not available on Bybit")
+            else:
+                self.log.warning(f"SKIP {symbol} – price fetch failed: {e}")
+            return None
+
         if self._too_far(side, last, trigger):
             self.log.info(f"SKIP {symbol} – too far past trigger (last={last}, trigger={trigger})")
             return None
