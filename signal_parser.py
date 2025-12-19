@@ -19,7 +19,8 @@ NUM = r"([0-9]+(?:\.[0-9]+)?)"
 # ============================================================
 
 # Signal type detection
-RE_NEW_SIGNAL = re.compile(r"NEW SIGNAL|NEW TRADE SIGNAL", re.I)
+# Accept: "NEW SIGNAL", "NEW TRADE SIGNAL", "LONG SIGNAL", "SHORT SIGNAL", or "Trade Signal"
+RE_NEW_SIGNAL = re.compile(r"NEW SIGNAL|NEW TRADE SIGNAL|(?:LONG|SHORT)\s+SIGNAL|Trade\s+Signal", re.I)
 RE_CANCELLED = re.compile(r"TRADE CANCELLED|TRADE CLOSED", re.I)
 
 # Side and symbol: "SHORT SIGNAL - OL/USDT" or "LONG SIGNAL - BTC/USDT"
