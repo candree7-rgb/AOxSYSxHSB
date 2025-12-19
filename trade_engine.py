@@ -575,25 +575,59 @@ class TradeEngine:
                     return False
         return False
 
-    def _start_trailing(self, tr: Dict[str, Any], tp_num: int) -> None:
-        # Bybit trailingStop expects absolute distance (price units), so we convert percent -> price distance
+    def _start_trailing(self, tr: Dict[str, Any], tp_num: int) -> bool:
+        """Start trailing stop after TP hit. Returns True on success.
+
+        For Bybit trailing stops:
+        - SHORT: activePrice must be below current price (we trail UP from profit)
+        - LONG: activePrice must be above current price (we trail DOWN from profit)
+        """
         symbol = tr["symbol"]
         side = tr["order_side"]  # Buy/Sell
         tp_prices = tr.get("tp_prices") or []
+        entry = float(tr.get("entry_price") or tr.get("trigger"))
 
         rules = self._get_instrument_rules(symbol)
         tick_size = rules["tick_size"]
 
-        if len(tp_prices) < tp_num:
-            # fallback: use current market
-            anchor = self.bybit.last_price(CATEGORY, symbol)
-        else:
+        # Get current price to validate trailing setup
+        try:
+            current_price = self.bybit.last_price(CATEGORY, symbol)
+        except Exception as e:
+            self.log.warning(f"Cannot get current price for trailing: {e}")
+            return False
+
+        # Determine activation price (TP level or current profitable price)
+        if len(tp_prices) >= tp_num:
             anchor = float(tp_prices[tp_num-1])
+        else:
+            anchor = current_price
 
         anchor = self._round_price(anchor, tick_size)
-        dist = self._round_price(anchor * (TRAIL_DISTANCE_PCT / 100.0), tick_size)
+        dist = self._round_price(current_price * (TRAIL_DISTANCE_PCT / 100.0), tick_size)
 
-        # activation price: anchor (TP level)
+        # Validate trailing setup for Bybit rules
+        if side == "Sell":  # SHORT position
+            # For SHORT: activePrice should be at or below current price
+            # And we need to be in profit (current < entry)
+            if current_price >= entry:
+                self.log.warning(f"Trailing skip: SHORT not in profit (price {current_price} >= entry {entry})")
+                return False
+            # Use current price as activation if anchor is above current
+            if anchor > current_price:
+                anchor = current_price
+        else:  # LONG position
+            # For LONG: activePrice should be at or above current price
+            # And we need to be in profit (current > entry)
+            if current_price <= entry:
+                self.log.warning(f"Trailing skip: LONG not in profit (price {current_price} <= entry {entry})")
+                return False
+            # Use current price as activation if anchor is below current
+            if anchor < current_price:
+                anchor = current_price
+
+        anchor = self._round_price(anchor, tick_size)
+
         body = {
             "category": CATEGORY,
             "symbol": symbol,
@@ -603,15 +637,23 @@ class TradeEngine:
             "trailingStop": f"{dist:.10f}",
         }
 
-        # keep SL at BE if already moved; otherwise keep existing stopLoss unchanged
-        if tr.get("sl_moved_to_be") and tr.get("entry_price"):
-            be_price = self._round_price(float(tr['entry_price']), tick_size)
+        # Keep SL at BE if already moved
+        if tr.get("sl_moved_to_be") and entry:
+            be_price = self._round_price(entry, tick_size)
             body["stopLoss"] = f"{be_price:.10f}"
 
         if DRY_RUN:
             self.log.info(f"DRY_RUN set trailing: {body}")
-            return
-        self.bybit.set_trading_stop(body)
+            return True
+
+        try:
+            self.bybit.set_trading_stop(body)
+            self.log.info(f"✅ Trailing set: activate @ {anchor}, distance {dist}")
+            return True
+        except Exception as e:
+            self.log.warning(f"⚠️ Trailing stop failed: {e}")
+            self.log.info(f"   Position remains protected by SL at BE")
+            return False
 
     # ---------- DCA TP recalculation ----------
     def recalculate_tps_after_dca(self, trade: Dict[str, Any]) -> None:

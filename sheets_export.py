@@ -107,9 +107,9 @@ def _get_sheet():
             worksheet = spreadsheet.worksheet("Trades")
         except gspread.exceptions.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title="Trades", rows=1000, cols=20)
-            # Add headers
-            worksheet.update('A1:Q1', [TRADE_HEADERS])
-            worksheet.format('A1:Q1', {'textFormat': {'bold': True}})
+            # Add headers (A through T = 20 columns)
+            worksheet.update('A1:T1', [TRADE_HEADERS])
+            worksheet.format('A1:T1', {'textFormat': {'bold': True}})
             log.info("Created 'Trades' worksheet with headers")
 
         return worksheet
